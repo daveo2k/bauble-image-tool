@@ -95,6 +95,8 @@ input[type="range"] { accent-color: var(--accent); width: 100%; }
 select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; max-width: 100%; }
 .chk { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
 .chk input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.chk.small { font-size: 12px; color: var(--muted); }
+input[type="number"]:disabled { opacity: 0.7; }
 .card-f { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
 .acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .warn { color: var(--warn); font-size: 12px; font-weight: 500; }
@@ -161,7 +163,8 @@ dl.stats dd { margin: 0; text-align: right; font-family: var(--font-mono); font-
       <div class="fields">
         <div class="ctl"><label for="i-sphere">Sphere diameter (mm)</label><input type="number" id="i-sphere" min="20" max="400" step="1" value="100"></div>
         <div class="ctl"><label for="i-cyl">Cylinder outer Ø (mm)</label><input type="number" id="i-cyl" min="0" max="200" step="0.5" value="36"></div>
-        <div class="ctl"><label for="i-h">Image height (px)</label><input type="number" id="i-h" min="400" max="4000" step="10" value="1600"></div>
+        <div class="ctl"><label for="i-h">Image height (px)</label><input type="number" id="i-h" min="200" max="6000" step="10" value="1600" disabled>
+          <label class="chk small"><input type="checkbox" id="i-auto" checked> Work out from sphere size</label></div>
         <div class="ctl"><label for="i-span">Photos cover</label><select id="i-span"><option value="360">Full wrap (360°)</option><option value="180">Front half (180°)</option></select></div>
         <div class="ctl"><label for="i-fill">Empty space and back half</label><select id="i-fill"><option value="white">White</option><option value="black">Black</option></select></div>
       </div>
@@ -175,7 +178,7 @@ dl.stats dd { margin: 0; text-align: right; font-family: var(--font-mono); font-
           <div><dt>Pixel size at equator</dt><dd id="s-px"></dd></div>
           <div><dt>Height needed for 0.25 mm/px</dt><dd id="s-min"></dd></div>
         </dl>
-        <p class="note">You choose the image height; the width is worked out from it. Angular height = 180° − asin(cylinder Ø ÷ sphere Ø), and the image is always 360° wide, so the site never crops the ends. Any height at or above the “needed” figure gives LithophaneMaker all the detail it uses; more only makes the file bigger. In 180° mode the image is still a full wrap, with your photos across the front and the back half left plain.</p>
+        <p class="note">The image height is worked out from the sphere size, keeping the same detail as the 100 mm bauble (36.25 px per mm of diameter), and the width follows from the height. Untick “Work out from sphere size” to type your own height. Angular height = 180° − asin(cylinder Ø ÷ sphere Ø), and the image is always 360° wide, so the site never crops the ends. Any height at or above the “needed” figure gives LithophaneMaker all the detail it uses; more only makes the file bigger. In 180° mode the image is still a full wrap, with your photos across the front and the back half left plain.</p>
       </div>
     </div>
   </section>
@@ -281,7 +284,7 @@ dl.stats dd { margin: 0; text-align: right; font-family: var(--font-mono); font-
 const $ = s => document.querySelector(s);
 const DEF_SEAM = () => ({ type: 'crossfade', width: 145, curve: 'smooth', shape: 'straight', amp: 40, waves: 3, slant: 150 });
 const state = {
-  sphereD: 100, cylOD: 36, outH: 1600, fill: 'white', span: 360,
+  sphereD: 100, cylOD: 36, outH: 1600, autoH: true, fill: 'white', span: 360,
   guides: true, greyView: false, greySave: false,
   sameSeams: true, seamSel: 0, seams: [], panels: [], sel: 0, globeMode: 'lit'
 };
@@ -291,12 +294,16 @@ const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const mod = (a, n) => ((a % n) + n) % n;
 
 /* ---------- Geometry ---------- */
+const PX_PER_MM_DIA = 36.25;
 function geom() {
   const D = clamp(+state.sphereD || 100, 10, 1000);
   const c = clamp(+state.cylOD || 0, 0, D * 0.98);
   const cut = Math.asin(c / D) * 180 / Math.PI;
   const height = 180 - cut;
-  const H = Math.round(clamp(+state.outH || 1600, 200, 6000));
+  // Auto: keep the detail of the approved 100 mm bauble (3625 px around the equator,
+  // 36.25 px per mm of diameter), so a bigger sphere gets a proportionally bigger image.
+  const autoH = D * PX_PER_MM_DIA * height / 360;
+  const H = Math.round(clamp(state.autoH ? autoH : (+state.outH || 1600), 200, 6000));
   const W = Math.round(H * 360 / height);
   return { D, c, cut, height, H, W };
 }
@@ -818,6 +825,7 @@ function updateStats() {
   $('#s-size').textContent = `${g.W} × ${g.H} px`;
   $('#s-equator').textContent = (Math.PI * g.D).toFixed(1) + ' mm';
   $('#s-px').textContent = (Math.PI * g.D / g.W).toFixed(3) + ' mm';
+  if (state.autoH) $('#i-h').value = g.H;
   $('#s-min').textContent = Math.ceil(Math.PI * g.D / 0.25 * g.height / 360) + ' px';
   const s = state.seams[state.sameSeams ? 0 : state.seamSel];
   if (s) $('#f-width-info').textContent = `${(s.width / g.W * 360).toFixed(1)}° · ${(Math.PI * g.D * s.width / g.W).toFixed(1)} mm on the bauble`;
@@ -826,6 +834,12 @@ function updateStats() {
   $(sel).addEventListener('input', e => { const v = +e.target.value; if (v > 0) { state[key] = v; requestDraw(); } });
 });
 $('#i-fill').addEventListener('change', e => { state.fill = e.target.value; renderCards(); requestDraw(); });
+$('#i-auto').addEventListener('change', e => {
+  state.autoH = e.target.checked;
+  $('#i-h').disabled = state.autoH;
+  if (!state.autoH) state.outH = geom().H;   // start manual mode from the current auto value
+  requestDraw();
+});
 $('#i-span').addEventListener('change', e => {
   state.span = +e.target.value === 180 ? 180 : 360;
   state.panels.forEach((p, i) => { if (p.src) fitPanel(i); });
@@ -996,7 +1010,7 @@ function scheduleSave() {
     try {
       idb = idb || await openDB(); if (!idb) return;
       const snap = {
-        v: 1, sphereD: state.sphereD, cylOD: state.cylOD, outH: state.outH, fill: state.fill, span: state.span, greySave: state.greySave,
+        v: 1, sphereD: state.sphereD, cylOD: state.cylOD, outH: state.outH, autoH: state.autoH, fill: state.fill, span: state.span, greySave: state.greySave,
         sameSeams: state.sameSeams, seamSel: state.seamSel, seams: state.seams, sel: state.sel, globeMode: state.globeMode,
         panels: state.panels.map(p => p.src
           ? { name: p.name, blob: p.blob, sample: p.sample, f: p.f, zoom: p.zoom, cx: p.cx, cy: p.cy, mirror: p.mirror }
@@ -1022,7 +1036,7 @@ async function restore() {
       panels.push(p);
     }
     if (!panels.length) return false;
-    Object.assign(state, { sphereD: snap.sphereD, cylOD: snap.cylOD, outH: snap.outH, fill: snap.fill || 'white', span: snap.span === 180 ? 180 : 360, greySave: !!snap.greySave,
+    Object.assign(state, { sphereD: snap.sphereD, cylOD: snap.cylOD, outH: snap.outH, autoH: snap.autoH !== false, fill: snap.fill || 'white', span: snap.span === 180 ? 180 : 360, greySave: !!snap.greySave,
       sameSeams: snap.sameSeams !== false, seamSel: snap.seamSel || 0, seams: snap.seams || [], sel: snap.sel || 0, globeMode: snap.globeMode || 'lit', panels });
     syncSeams();
     return true;
@@ -1030,6 +1044,7 @@ async function restore() {
 }
 function syncInputs() {
   $('#i-sphere').value = state.sphereD; $('#i-cyl').value = state.cylOD; $('#i-h').value = state.outH;
+  $('#i-auto').checked = state.autoH; $('#i-h').disabled = state.autoH;
   $('#i-fill').value = state.fill; $('#i-span').value = String(state.span); $('#s-grey').checked = state.greySave; $('#f-same').checked = state.sameSeams;
   $('#g-mode').value = state.globeMode;
 }
