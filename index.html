@@ -111,6 +111,11 @@ button:disabled { opacity: 0.45; cursor: default; }
 .add-card strong { color: var(--ink); font-family: var(--font-display); font-size: 15px; }
 
 .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.seg.four { grid-template-columns: repeat(4, minmax(0, 1fr)); max-width: 260px; }
+.count-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.card.empty { border-style: dashed; }
+.card.empty .thumb { background: repeating-linear-gradient(45deg, var(--sunk) 0 6px, var(--bg) 6px 12px); }
+p.warn { margin: 0; }
 .seg label { border: 1px solid var(--line); border-radius: 7px; padding: 7px 8px; text-align: center; cursor: pointer; font-weight: 500; font-size: 13px; }
 .seg input { position: absolute; opacity: 0; pointer-events: none; }
 .seg input:checked + span { color: var(--accent); }
@@ -157,7 +162,8 @@ dl.stats dd { margin: 0; text-align: right; font-family: var(--font-mono); font-
         <div class="ctl"><label for="i-sphere">Sphere diameter (mm)</label><input type="number" id="i-sphere" min="20" max="400" step="1" value="100"></div>
         <div class="ctl"><label for="i-cyl">Cylinder outer Ø (mm)</label><input type="number" id="i-cyl" min="0" max="200" step="0.5" value="36"></div>
         <div class="ctl"><label for="i-h">Image height (px)</label><input type="number" id="i-h" min="400" max="4000" step="10" value="1600"></div>
-        <div class="ctl"><label for="i-fill">Empty space</label><select id="i-fill"><option value="white">White</option><option value="black">Black</option></select></div>
+        <div class="ctl"><label for="i-span">Photos cover</label><select id="i-span"><option value="360">Full wrap (360°)</option><option value="180">Front half (180°)</option></select></div>
+        <div class="ctl"><label for="i-fill">Empty space and back half</label><select id="i-fill"><option value="white">White</option><option value="black">Black</option></select></div>
       </div>
       <div class="bauble-out">
         <dl class="stats" aria-live="polite">
@@ -166,8 +172,10 @@ dl.stats dd { margin: 0; text-align: right; font-family: var(--font-mono); font-
           <div><dt>Angular height</dt><dd id="s-height"></dd></div>
           <div><dt>Cut by cylinder</dt><dd id="s-cut"></dd></div>
           <div><dt>Equator length</dt><dd id="s-equator"></dd></div>
+          <div><dt>Pixel size at equator</dt><dd id="s-px"></dd></div>
+          <div><dt>Height needed for 0.25 mm/px</dt><dd id="s-min"></dd></div>
         </dl>
-        <p class="note">Height = 180° − asin(cylinder Ø ÷ sphere Ø). The image width follows from that, so the site never crops the ends.</p>
+        <p class="note">You choose the image height; the width is worked out from it. Angular height = 180° − asin(cylinder Ø ÷ sphere Ø), and the image is always 360° wide, so the site never crops the ends. Any height at or above the “needed” figure gives LithophaneMaker all the detail it uses; more only makes the file bigger. In 180° mode the image is still a full wrap, with your photos across the front and the back half left plain.</p>
       </div>
     </div>
   </section>
@@ -193,7 +201,17 @@ dl.stats dd { margin: 0; text-align: right; font-family: var(--font-mono); font-
           <button id="b-add" type="button" class="primary">Add photos</button>
         </div>
       </div>
-      <p class="note" id="sample-note">These are sample pictures. Add your own photos and the samples are replaced.</p>
+      <div class="count-row">
+        <span class="lbl" id="n-photos-l">Number of photos</span>
+        <div class="seg four" role="radiogroup" aria-labelledby="n-photos-l">
+          <label><input type="radio" name="n-photos" value="1"><span>1</span></label>
+          <label><input type="radio" name="n-photos" value="2"><span>2</span></label>
+          <label><input type="radio" name="n-photos" value="3"><span>3</span></label>
+          <label><input type="radio" name="n-photos" value="4"><span>4</span></label>
+        </div>
+      </div>
+      <p class="note" id="sample-note">These are sample pictures. Add your own photos and they take the samples' places.</p>
+      <p class="warn" id="photo-msg" role="status" hidden></p>
       <div id="cards"></div>
     </section>
 
@@ -263,7 +281,7 @@ dl.stats dd { margin: 0; text-align: right; font-family: var(--font-mono); font-
 const $ = s => document.querySelector(s);
 const DEF_SEAM = () => ({ type: 'crossfade', width: 145, curve: 'smooth', shape: 'straight', amp: 40, waves: 3, slant: 150 });
 const state = {
-  sphereD: 100, cylOD: 36, outH: 1600, fill: 'white',
+  sphereD: 100, cylOD: 36, outH: 1600, fill: 'white', span: 360,
   guides: true, greyView: false, greySave: false,
   sameSeams: true, seamSel: 0, seams: [], panels: [], sel: 0, globeMode: 'lit'
 };
@@ -282,16 +300,24 @@ function geom() {
   const W = Math.round(H * 360 / height);
   return { D, c, cut, height, H, W };
 }
-function layout(W) {
-  const ps = state.panels, tot = ps.reduce((a, p) => a + p.f, 0) || 1;
+// Render plan: the photo panels laid across the photo area (all 360°, or the front 180°).
+// In 180° mode a plain "back half" item (null) follows the photos, and the whole
+// strip is shifted a quarter turn so the photos sit centred on the front.
+function plan(W) {
+  const ps = state.panels, N = ps.length, half = state.span === 180;
+  const span = half ? Math.round(W / 2) : W;
+  const tot = ps.reduce((a, p) => a + p.f, 0) || 1;
   const S = [0]; let acc = 0;
-  ps.forEach(p => { acc += p.f; S.push(Math.round(W * acc / tot)); });
-  S[ps.length] = W;
-  return S;
+  ps.forEach(p => { acc += p.f; S.push(Math.round(span * acc / tot)); });
+  if (N) S[N] = span;
+  const items = ps.slice();
+  let seams = state.seams.slice(0, N);
+  if (half && N) { items.push(null); S.push(W); seams = seams.concat([state.seams[0]]); }
+  return { S, items, seams, span, N, shift: half ? Math.round(W / 4) : 0 };
 }
-// Seam j is the left edge of panel j; seam 0 is the back seam where the wrap meets itself.
-function seamGeo(j, S, k) {
-  const N = state.panels.length, s = state.seams[j];
+// Seam j is the left edge of item j; seam 0 is where the strip meets itself.
+function seamGeo(j, P, k) {
+  const S = P.S, N = P.items.length, s = P.seams[j];
   const l = (j - 1 + N) % N;
   const wl = S[l + 1] - S[l], wr = S[j + 1] - S[j];
   const lim = Math.min(wl, wr);
@@ -307,26 +333,28 @@ const baseScale = (p, g) => p.zoom * g.H / p.ih;   // output px per source px at
 
 /* ---------- Compositing ---------- */
 function composite(kReq) {
-  const g = geom(), N = state.panels.length;
+  const g = geom();
   const W = Math.max(1, Math.round(g.W * kReq)), H = Math.max(1, Math.round(g.H * kReq));
   const k = W / g.W;
   const out = new ImageData(W, H), o = out.data;
-  const Sf = layout(g.W), S = Sf.map(v => v * k);
-  if (!N) { o.fill(255); return { img: out, W, H, k, S, sg: [], g }; }
-  const sg = state.panels.map((_, j) => seamGeo(j, Sf, k));
+  const P = plan(g.W), S = P.S.map(v => v * k), N = P.items.length, sh = Math.round(P.shift * k);
+  if (!state.panels.length) { o.fill(255); return { img: out, W, H, k, S, sg: [], g, P, sh }; }
+  const sg = P.items.map((_, j) => seamGeo(j, P, k));
   const fillV = state.fill === 'black' ? 0 : 255;
-  const strips = state.panels.map((p, i) => {
+  const strips = P.items.map((p, i) => {
     const sL = sg[i], sR = sg[(i + 1) % N];
     const ox = Math.floor(S[i] - sL.F / 2 - sL.A - 2);
     const sw = Math.ceil(S[i + 1] + sR.F / 2 + sR.A + 2) - ox;
     const cv = document.createElement('canvas'); cv.width = sw; cv.height = H;
     const ctx = cv.getContext('2d', { willReadFrequently: true });
     ctx.fillStyle = fillV ? '#fff' : '#000'; ctx.fillRect(0, 0, sw, H);
-    const sc = baseScale(p, g) * k, m = p.mirror ? -1 : 1;
-    const Xc = (S[i] + S[i + 1]) / 2 - ox, Yc = H / 2;
-    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-    ctx.setTransform(m * sc, 0, 0, sc, Xc - m * sc * p.cx, Yc - sc * p.cy);
-    ctx.drawImage(p.src, 0, 0);
+    if (p && p.src) {
+      const sc = baseScale(p, g) * k, m = p.mirror ? -1 : 1;
+      const Xc = (S[i] + S[i + 1]) / 2 - ox, Yc = H / 2;
+      ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+      ctx.setTransform(m * sc, 0, 0, sc, Xc - m * sc * p.cx, Yc - sc * p.cy);
+      ctx.drawImage(p.src, 0, 0);
+    }
     return { ox, sw, d: ctx.getImageData(0, 0, sw, H).data };
   });
   const zs = new Array(N), ze = new Array(N), cc = new Array(N);
@@ -341,7 +369,7 @@ function composite(kReq) {
       const end = p + 1 < N ? zs[p + 1] : zs[0] + W;
       for (let X = ze[p]; X < end; X++) {
         let lx = X - st.ox; lx = lx < 0 ? 0 : lx > last ? last : lx;
-        const si = rb + lx * 4, di = row + mod(X, W) * 4;
+        const si = rb + lx * 4, di = row + mod(X + sh, W) * 4;
         o[di] = d[si]; o[di + 1] = d[si + 1]; o[di + 2] = d[si + 2]; o[di + 3] = 255;
       }
     }
@@ -356,7 +384,7 @@ function composite(kReq) {
         const t = clamp((X + 0.5 - z0) / F, 0, 1);
         const li = lrb + clamp(X + lshift - Ls.ox, 0, Ls.sw - 1) * 4;
         const ri = rrb + clamp(X - Rs.ox, 0, Rs.sw - 1) * 4;
-        const di = row + mod(X, W) * 4;
+        const di = row + mod(X + sh, W) * 4;
         if (s.type === 'crossfade') {
           const a = cv(t), b = 1 - a;
           o[di] = Ld[li] * b + Rd[ri] * a; o[di + 1] = Ld[li + 1] * b + Rd[ri + 1] * a; o[di + 2] = Ld[li + 2] * b + Rd[ri + 2] * a;
@@ -370,7 +398,7 @@ function composite(kReq) {
       }
     }
   }
-  return { img: out, W, H, k, S, sg, g };
+  return { img: out, W, H, k, S, sg, g, P, sh };
 }
 function greyCopy(img) {
   const c = new ImageData(img.width, img.height), s = img.data, d = c.data;
@@ -401,7 +429,7 @@ function draw() {
   buildTex(); drawGlobe(); updateStats(); syncCards();
 }
 function drawGuides(ctx, r) {
-  const { W, H, S, sg, g } = r, N = state.panels.length, u = W / 1000;
+  const { W, H, S, sg, g, P, sh } = r, N = state.panels.length, M = P.items.length, u = W / 1000;
   ctx.save();
   // squeeze bands: rows where the sphere's circumference is under 70% of the equator
   const yAt = phi => (phi - g.cut) / g.height * H;
@@ -421,9 +449,16 @@ function drawGuides(ctx, r) {
   if (yTop > fs * 1.4) label('squeezed over 30% on the bauble', 6 * u, yTop - 3 * u);
   if (yBot < H - 4) label('squeezed over 30%', 6 * u, H - 4 * u);
   // fade zones and seam lines
-  for (let j = 0; j < N; j++) {
-    const s = sg[j];
-    const xs = j === 0 ? [0, W] : [S[j]];
+  if (sh) {   // 180° mode: label the plain back half
+    ctx.textBaseline = 'middle';
+    label('plain back half', 8 * u, H * 0.9);
+    ctx.textAlign = 'right'; label('plain back half', W - 8 * u, H * 0.9); ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+  }
+  for (let j = 0; j < M; j++) {
+    const s = sg[j], b = mod(S[j] + sh, W);
+    const edge = j === 0 || P.items[j] === null || P.items[(j - 1 + M) % M] === null;
+    const xs = b === 0 ? [0, W] : [b];
     for (const base of xs) {
       if (s.F > 0) {
         ctx.setLineDash([]); ctx.fillStyle = 'rgba(240,162,62,0.14)';
@@ -435,7 +470,7 @@ function drawGuides(ctx, r) {
       ctx.setLineDash([7 * u, 6 * u]); ctx.lineWidth = Math.max(1.5, 2 * u);
       ctx.strokeStyle = 'rgba(0,0,0,0.5)';
       ctx.beginPath(); for (let y = 0; y <= H; y += 4) ctx.lineTo(base + s.off(y / H), y); ctx.stroke();
-      ctx.strokeStyle = j === 0 ? 'rgba(255,255,255,0.6)' : '#fff'; ctx.lineDashOffset = 6 * u;
+      ctx.strokeStyle = edge ? 'rgba(255,255,255,0.6)' : '#fff'; ctx.lineDashOffset = 6 * u;
       ctx.beginPath(); for (let y = 0; y <= H; y += 4) ctx.lineTo(base + s.off(y / H), y); ctx.stroke();
       ctx.lineDashOffset = 0;
     }
@@ -443,7 +478,7 @@ function drawGuides(ctx, r) {
   // panel numbers + selection
   ctx.setLineDash([]); ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
   for (let p = 0; p < N; p++) {
-    const cx = (S[p] + S[p + 1]) / 2, rr = 13 * u * 1.3;
+    const cx = mod((S[p] + S[p + 1]) / 2 + sh, W), rr = 13 * u * 1.3;
     const sel = p === state.sel;
     ctx.fillStyle = sel ? '#e08a1e' : 'rgba(20,18,15,0.75)';
     ctx.beginPath(); ctx.arc(cx, rr + 8 * u, rr, 0, Math.PI * 2); ctx.fill();
@@ -451,7 +486,7 @@ function drawGuides(ctx, r) {
     ctx.fillText(String(p + 1), cx, rr + 8 * u + 1);
     if (sel) {
       ctx.strokeStyle = '#e08a1e'; ctx.lineWidth = Math.max(2, 3 * u);
-      ctx.strokeRect(S[p] + 1.5, 1.5, S[p + 1] - S[p] - 3, H - 3);
+      ctx.strokeRect(S[p] + sh + 1.5, 1.5, S[p + 1] - S[p] - 3, H - 3);
     }
   }
   ctx.restore();
@@ -465,26 +500,29 @@ function cvPoint(e) {
 }
 function hit(pt) {
   if (!cache || !state.panels.length) return null;
-  const { S, sg, H } = cache, N = state.panels.length;
+  const { S, sg, H, W, sh } = cache, N = state.panels.length;
+  const X = mod(pt.x - sh, W);
   for (let j = 1; j < N; j++) {
     const x = S[j] + sg[j].off(pt.y / H);
-    if (Math.abs(pt.x - x) < 9 * pt.px) return { seam: j };
+    if (Math.abs(X - x) < 9 * pt.px) return { seam: j };
   }
-  for (let p = 0; p < N; p++) if (pt.x >= S[p] && pt.x < S[p + 1]) return { panel: p };
-  return { panel: N - 1 };
+  for (let p = 0; p < N; p++) if (X >= S[p] && X < S[p + 1]) return { panel: p };
+  return sh ? null : { panel: N - 1 };
 }
 wrapCv.addEventListener('pointermove', e => {
   const pt = cvPoint(e);
   if (!drag) { const h = hit(pt); wrapCv.classList.toggle('seam', !!(h && h.seam)); return; }
   const g = geom(), k = cache.k;
   if (drag.seam) {
-    const j = drag.seam, S0 = drag.S0, minW = 60;
-    const X = clamp(pt.x / k, S0[j - 1] + minW, S0[j + 1] - minW);
+    const j = drag.seam, S0 = drag.P.S, span = drag.P.span, minW = 60;
+    const X = clamp(mod(pt.x - cache.sh, cache.W) / k, S0[j - 1] + minW, S0[j + 1] - minW);
     const tot = state.panels.reduce((a, p) => a + p.f, 0);
-    state.panels[j - 1].f = (X - S0[j - 1]) / g.W * tot;
-    state.panels[j].f = (S0[j + 1] - X) / g.W * tot;
+    state.panels[j - 1].f = (X - S0[j - 1]) / span * tot;
+    state.panels[j].f = (S0[j + 1] - X) / span * tot;
   } else {
-    const p = state.panels[drag.panel], sc = baseScale(p, g) * k, m = p.mirror ? -1 : 1;
+    const p = state.panels[drag.panel];
+    if (!p.src) return;
+    const sc = baseScale(p, g) * k, m = p.mirror ? -1 : 1;
     p.cx = drag.cx - (pt.x - drag.x) / (m * sc);
     p.cy = drag.cy - (pt.y - drag.y) / sc;
   }
@@ -495,7 +533,7 @@ wrapCv.addEventListener('pointerdown', e => {
   if (!h) return;
   wrapCv.setPointerCapture(e.pointerId);
   wrapCv.classList.add('dragging');
-  if (h.seam) drag = { seam: h.seam, S0: layout(geom().W) };
+  if (h.seam) drag = { seam: h.seam, P: plan(geom().W) };
   else {
     const p = state.panels[h.panel];
     if (state.sel !== h.panel) { state.sel = h.panel; markSelected(); requestDraw(); }
@@ -507,10 +545,10 @@ wrapCv.addEventListener('pointerup', endDrag);
 wrapCv.addEventListener('pointercancel', endDrag);
 wrapCv.addEventListener('wheel', e => {
   const pt = cvPoint(e), h = hit(pt);
-  if (!h || h.panel === undefined || h.panel !== state.sel) return;
+  if (!h || h.panel === undefined || h.panel !== state.sel || !state.panels[h.panel].src) return;
   e.preventDefault();
   const g = geom(), k = cache.k, p = state.panels[h.panel], m = p.mirror ? -1 : 1;
-  const S = cache.S, Xc = (S[h.panel] + S[h.panel + 1]) / 2, Yc = cache.H / 2;
+  const S = cache.S, Xc = (S[h.panel] + S[h.panel + 1]) / 2 + cache.sh, Yc = cache.H / 2;
   const sc = baseScale(p, g) * k;
   const u = p.cx + (pt.x - Xc) / (m * sc), v = p.cy + (pt.y - Yc) / sc;
   p.zoom = clamp(p.zoom * Math.exp(-e.deltaY * 0.0015), 0.2, 6);
@@ -523,8 +561,22 @@ wrapCv.addEventListener('wheel', e => {
 function newPanel(src, iw, ih, name, extra) {
   return Object.assign({ id: uid++, src, iw, ih, name, f: 1, zoom: 1, cx: iw / 2, cy: ih / 2, mirror: false, blob: null, sample: null }, extra || {});
 }
+const MAX_PHOTOS = 4;
+const emptyPanel = f => newPanel(null, 1000, 1000, 'Empty slot', { f: f || 1 });
+const avgF = () => { const n = state.panels.length; return n ? state.panels.reduce((a, p) => a + p.f, 0) / n : 1; };
+function setCount(n) {
+  n = clamp(Math.round(n), 1, MAX_PHOTOS);
+  const ps = state.panels;
+  while (ps.length < n) ps.push(emptyPanel(avgF()));
+  while (ps.length > n) {
+    const e = ps.map(p => !p.src).lastIndexOf(true);   // drop empty slots first
+    ps.splice(e >= 0 ? e : ps.length - 1, 1);
+  }
+  syncSeams(); renderCards(); renderSeamPicker(); requestDraw();
+}
 function fitPanel(i) {
-  const g = geom(), S = layout(g.W), p = state.panels[i];
+  const g = geom(), S = plan(g.W).S, p = state.panels[i];
+  if (!p || !p.src) return;
   const need = (S[i + 1] - S[i] + (state.seams[i] ? state.seams[i].width : 0)) * p.ih / (g.H * p.iw);
   p.zoom = Math.max(1, need); p.cx = p.iw / 2; p.cy = p.ih / 2;
 }
@@ -550,22 +602,36 @@ async function loadBlob(blob) {
   }
   return { src, iw, ih };
 }
-async function addFiles(files) {
+function photoMsg(msg) { const n = $('#photo-msg'); n.textContent = msg || ''; n.hidden = !msg; }
+// Fills the given slot first, then any other empty slots, then adds slots up to MAX_PHOTOS.
+async function addFiles(files, slot) {
   files = [...files].filter(f => f.type.startsWith('image/'));
   if (!files.length) return;
-  if (state.panels.length && state.panels.every(p => p.sample !== null)) state.panels = [];
-  const added = [];
+  // Samples become empty slots of the same widths, so the layout is kept.
+  if (state.panels.length && state.panels.every(p => p.sample !== null)) state.panels = state.panels.map(p => emptyPanel(p.f));
+  const targets = [];
+  if (slot !== undefined && state.panels[slot] && !state.panels[slot].src) targets.push(slot);
+  state.panels.forEach((p, i) => { if (!p.src && !targets.includes(i)) targets.push(i); });
+  const added = [], failed = []; let skipped = 0;
   for (const f of files) {
+    let i = targets.shift();
+    if (i === undefined) {
+      if (state.panels.length >= MAX_PHOTOS) { skipped++; continue; }
+      state.panels.push(emptyPanel(avgF())); i = state.panels.length - 1;
+    }
     try {
       const { src, iw, ih } = await loadBlob(f);
-      const tot = state.panels.reduce((a, p) => a + p.f, 0), n = state.panels.length;
-      const p = newPanel(src, iw, ih, f.name || 'Pasted photo', { blob: f, f: n ? tot / n : 1 });
-      state.panels.push(p); added.push(state.panels.length - 1);
-    } catch (err) { setStatus(`Could not read ${f.name}. Try a JPEG or PNG.`, 'err'); }
+      state.panels[i] = newPanel(src, iw, ih, f.name || 'Pasted photo', { blob: f, f: state.panels[i].f });
+      added.push(i);
+    } catch (err) { failed.push(f.name || 'photo'); }
   }
   syncSeams();
-  state.panels.forEach((_, i) => fitPanel(i));
+  added.forEach(fitPanel);
   if (added.length) state.sel = added[0];
+  const msgs = [];
+  if (skipped) msgs.push(`The wrap holds up to ${MAX_PHOTOS} photos, so ${skipped} ${skipped === 1 ? 'was' : 'were'} not added. Remove a photo to make room.`);
+  if (failed.length) msgs.push(`Could not read ${failed.join(', ')}. Try a JPEG or PNG.`);
+  photoMsg(msgs.join(' '));
   renderCards(); renderSeamPicker(); requestDraw();
 }
 
@@ -612,6 +678,22 @@ function renderCards() {
     const el = document.createElement('article');
     el.className = 'card' + (i === state.sel ? ' sel' : ''); el.dataset.i = i;
     const id = p.id;
+    const moveBtns = `<button type="button" class="icon" data-a="left" aria-label="Move left" ${i === 0 ? 'disabled' : ''}>${ICON.left}</button>
+          <button type="button" class="icon" data-a="right" aria-label="Move right" ${i === state.panels.length - 1 ? 'disabled' : ''}>${ICON.right}</button>`;
+    if (!p.src) {
+      el.classList.add('empty');
+      el.innerHTML = `
+      <header class="card-h"><span class="num">${i + 1}</span><div class="thumb"></div>
+        <div class="nm"><strong>Empty slot</strong><span>Shows as ${state.fill} until you add a photo</span></div></header>
+      <div class="ctl"><label for="w-${id}">Width</label>
+        <div class="row"><input type="number" id="w-${id}" data-k="w" min="60" step="1"><span class="unit">px</span><span class="info" data-info="w"></span></div></div>
+      <div class="card-f">
+        <button type="button" class="primary" data-a="fill">Add photo</button>
+        <div class="acts">${moveBtns}<button type="button" data-a="del" ${state.panels.length === 1 ? 'disabled' : ''}>Remove slot</button></div>
+      </div>`;
+      box.appendChild(el);
+      return;
+    }
     el.innerHTML = `
       <header class="card-h"><span class="num">${i + 1}</span><canvas class="thumb" width="144" height="96"></canvas>
         <div class="nm"><strong class="name"></strong><span>${p.iw} × ${p.ih} px</span></div></header>
@@ -626,9 +708,8 @@ function renderCards() {
         <span class="warn" data-info="cov" hidden>White edges showing</span>
         <div class="acts">
           <button type="button" data-a="fit">Fit</button>
-          <button type="button" class="icon" data-a="left" aria-label="Move left" ${i === 0 ? 'disabled' : ''}>${ICON.left}</button>
-          <button type="button" class="icon" data-a="right" aria-label="Move right" ${i === state.panels.length - 1 ? 'disabled' : ''}>${ICON.right}</button>
-          <button type="button" data-a="del">Remove</button>
+          ${moveBtns}
+          <button type="button" data-a="del">${p.sample !== null ? 'Remove' : 'Remove photo'}</button>
         </div>
       </div>`;
     el.querySelector('.name').textContent = p.name;
@@ -637,22 +718,27 @@ function renderCards() {
     t.drawImage(p.src, (144 - p.iw * s) / 2, (96 - p.ih * s) / 2, p.iw * s, p.ih * s);
     box.appendChild(el);
   });
-  const add = document.createElement('button');
-  add.type = 'button'; add.className = 'add-card'; add.dataset.a = 'add';
-  add.innerHTML = '<span><strong>Add photos</strong><br>or drop them anywhere on this page</span>';
-  box.appendChild(add);
+  if (state.panels.length < MAX_PHOTOS) {
+    const add = document.createElement('button');
+    add.type = 'button'; add.className = 'add-card'; add.dataset.a = 'add';
+    add.innerHTML = `<span><strong>Add photos</strong><br>or drop them anywhere on this page (up to ${MAX_PHOTOS})</span>`;
+    box.appendChild(add);
+  }
+  document.querySelectorAll('input[name="n-photos"]').forEach(r => r.checked = +r.value === state.panels.length);
+  $('#b-add').disabled = state.panels.length >= MAX_PHOTOS && state.panels.every(p => p.src && p.sample === null);
   syncCards();
 }
 function markSelected() {
   document.querySelectorAll('#cards .card').forEach(c => c.classList.toggle('sel', +c.dataset.i === state.sel));
 }
 function syncCards() {
-  const g = geom(), S = layout(g.W);
+  const g = geom(), S = plan(g.W).S;
   document.querySelectorAll('#cards .card').forEach(el => {
     const i = +el.dataset.i, p = state.panels[i]; if (!p) return;
     const w = S[i + 1] - S[i];
     const set = (sel, v) => { const n = el.querySelector(sel); if (n && document.activeElement !== n) n.value = v; };
     set('[data-k="w"]', w);
+    if (!p.src) { el.querySelector('[data-info="w"]').textContent = `${(w / g.W * 360).toFixed(1)}° · ${(Math.PI * g.D * w / g.W).toFixed(1)} mm`; return; }
     set('input[type="range"][data-k="zoom"]', Math.round(p.zoom * 100));
     set('input[type="number"][data-k="zoom"]', Math.round(p.zoom * 100));
     set('[data-k="cx"]', Math.round(p.cx));
@@ -670,11 +756,11 @@ function syncCards() {
   });
 }
 function setWidth(i, px) {
-  const g = geom(), N = state.panels.length;
+  const g = geom(), N = state.panels.length, span = plan(g.W).span;
   if (N < 2) return;
-  px = clamp(px, 60, g.W - 60 * (N - 1));
+  px = clamp(px, 60, span - 60 * (N - 1));
   const tot = state.panels.reduce((a, p) => a + p.f, 0), p = state.panels[i];
-  const nf = px / g.W * tot, ratio = (tot - nf) / (tot - p.f);
+  const nf = px / span * tot, ratio = (tot - nf) / (tot - p.f);
   state.panels.forEach((q, j) => { if (j !== i) q.f *= ratio; });
   p.f = nf;
 }
@@ -698,16 +784,23 @@ $('#cards').addEventListener('pointerdown', e => {
 $('#cards').addEventListener('click', e => {
   const b = e.target.closest('[data-a]'); if (!b) return;
   const a = b.dataset.a;
-  if (a === 'add') { $('#file').click(); return; }
+  if (a === 'add') { pickSlot = undefined; $('#file').click(); return; }
   const i = +b.closest('.card').dataset.i, ps = state.panels;
+  if (a === 'fill') { pickSlot = i; $('#file').click(); return; }
   if (a === 'fit') { fitPanel(i); requestDraw(); return; }
   if (a === 'left' && i > 0) { [ps[i - 1], ps[i]] = [ps[i], ps[i - 1]]; state.sel = i - 1; }
   if (a === 'right' && i < ps.length - 1) { [ps[i + 1], ps[i]] = [ps[i], ps[i + 1]]; state.sel = i + 1; }
-  if (a === 'del') { ps.splice(i, 1); syncSeams(); }
+  if (a === 'del') {
+    if (ps[i].src && ps[i].sample === null) ps[i] = emptyPanel(ps[i].f);   // a photo leaves an empty slot
+    else if (ps.length > 1) ps.splice(i, 1);
+    syncSeams(); photoMsg('');
+  }
   renderCards(); renderSeamPicker(); requestDraw();
 });
-$('#b-add').addEventListener('click', () => $('#file').click());
-$('#file').addEventListener('change', e => { addFiles(e.target.files); e.target.value = ''; });
+let pickSlot;
+$('#b-add').addEventListener('click', () => { pickSlot = undefined; $('#file').click(); });
+$('#file').addEventListener('change', e => { addFiles(e.target.files, pickSlot); pickSlot = undefined; e.target.value = ''; });
+document.querySelectorAll('input[name="n-photos"]').forEach(r => r.addEventListener('change', () => { if (r.checked) setCount(+r.value); }));
 $('#b-equal').addEventListener('click', () => { state.panels.forEach(p => p.f = 1); requestDraw(); });
 let dragDepth = 0;
 window.addEventListener('dragenter', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { dragDepth++; $('#drop').hidden = false; } });
@@ -724,20 +817,28 @@ function updateStats() {
   $('#s-ratio').textContent = (360 / g.height).toFixed(4) + ' : 1';
   $('#s-size').textContent = `${g.W} × ${g.H} px`;
   $('#s-equator').textContent = (Math.PI * g.D).toFixed(1) + ' mm';
+  $('#s-px').textContent = (Math.PI * g.D / g.W).toFixed(3) + ' mm';
+  $('#s-min').textContent = Math.ceil(Math.PI * g.D / 0.25 * g.height / 360) + ' px';
   const s = state.seams[state.sameSeams ? 0 : state.seamSel];
   if (s) $('#f-width-info').textContent = `${(s.width / g.W * 360).toFixed(1)}° · ${(Math.PI * g.D * s.width / g.W).toFixed(1)} mm on the bauble`;
 }
 [['#i-sphere', 'sphereD'], ['#i-cyl', 'cylOD'], ['#i-h', 'outH']].forEach(([sel, key]) => {
   $(sel).addEventListener('input', e => { const v = +e.target.value; if (v > 0) { state[key] = v; requestDraw(); } });
 });
-$('#i-fill').addEventListener('change', e => { state.fill = e.target.value; requestDraw(); });
+$('#i-fill').addEventListener('change', e => { state.fill = e.target.value; renderCards(); requestDraw(); });
+$('#i-span').addEventListener('change', e => {
+  state.span = +e.target.value === 180 ? 180 : 360;
+  state.panels.forEach((p, i) => { if (p.src) fitPanel(i); });
+  renderSeamPicker(); requestDraw();
+});
 $('#t-guides').addEventListener('change', e => { state.guides = e.target.checked; requestDraw(); });
 $('#t-grey').addEventListener('change', e => { state.greyView = e.target.checked; requestDraw(); });
 
 /* ---------- Fades ---------- */
 function seamName(j) {
   const N = state.panels.length;
-  return j === 0 ? `Back seam (${N} → 1)` : `${j} → ${j + 1}`;
+  if (j === 0) return state.span === 180 ? 'Edges of the photos (plain half ↔ photos)' : N === 1 ? 'Back seam (where the photo meets itself)' : `Back seam (${N} → 1)`;
+  return `${j} → ${j + 1}`;
 }
 function renderSeamPicker() {
   const sel = $('#f-pick'); sel.innerHTML = '';
@@ -895,9 +996,11 @@ function scheduleSave() {
     try {
       idb = idb || await openDB(); if (!idb) return;
       const snap = {
-        v: 1, sphereD: state.sphereD, cylOD: state.cylOD, outH: state.outH, fill: state.fill, greySave: state.greySave,
+        v: 1, sphereD: state.sphereD, cylOD: state.cylOD, outH: state.outH, fill: state.fill, span: state.span, greySave: state.greySave,
         sameSeams: state.sameSeams, seamSel: state.seamSel, seams: state.seams, sel: state.sel, globeMode: state.globeMode,
-        panels: state.panels.map(p => ({ name: p.name, blob: p.blob, sample: p.sample, f: p.f, zoom: p.zoom, cx: p.cx, cy: p.cy, mirror: p.mirror }))
+        panels: state.panels.map(p => p.src
+          ? { name: p.name, blob: p.blob, sample: p.sample, f: p.f, zoom: p.zoom, cx: p.cx, cy: p.cy, mirror: p.mirror }
+          : { empty: true, f: p.f })
       };
       idb.transaction('p', 'readwrite').objectStore('p').put(snap, 'current');
     } catch { /* storage is optional */ }
@@ -909,8 +1012,9 @@ async function restore() {
     const snap = await new Promise(res => { const r = idb.transaction('p').objectStore('p').get('current'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); });
     if (!snap || !snap.panels || !snap.panels.length) return false;
     const panels = [];
-    for (const s of snap.panels) {
+    for (const s of snap.panels.slice(0, MAX_PHOTOS)) {
       let p;
+      if (s.empty) { panels.push(emptyPanel(s.f)); continue; }
       if (s.sample !== null && s.sample !== undefined) p = makeSample(s.sample);
       else if (s.blob) { const { src, iw, ih } = await loadBlob(s.blob); p = newPanel(src, iw, ih, s.name, { blob: s.blob }); }
       else continue;
@@ -918,7 +1022,7 @@ async function restore() {
       panels.push(p);
     }
     if (!panels.length) return false;
-    Object.assign(state, { sphereD: snap.sphereD, cylOD: snap.cylOD, outH: snap.outH, fill: snap.fill || 'white', greySave: !!snap.greySave,
+    Object.assign(state, { sphereD: snap.sphereD, cylOD: snap.cylOD, outH: snap.outH, fill: snap.fill || 'white', span: snap.span === 180 ? 180 : 360, greySave: !!snap.greySave,
       sameSeams: snap.sameSeams !== false, seamSel: snap.seamSel || 0, seams: snap.seams || [], sel: snap.sel || 0, globeMode: snap.globeMode || 'lit', panels });
     syncSeams();
     return true;
@@ -926,7 +1030,7 @@ async function restore() {
 }
 function syncInputs() {
   $('#i-sphere').value = state.sphereD; $('#i-cyl').value = state.cylOD; $('#i-h').value = state.outH;
-  $('#i-fill').value = state.fill; $('#s-grey').checked = state.greySave; $('#f-same').checked = state.sameSeams;
+  $('#i-fill').value = state.fill; $('#i-span').value = String(state.span); $('#s-grey').checked = state.greySave; $('#f-same').checked = state.sameSeams;
   $('#g-mode').value = state.globeMode;
 }
 

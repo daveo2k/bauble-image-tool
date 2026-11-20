@@ -5,7 +5,9 @@ A browser tool for building the 360° wrap image for a lithophane sphere (Classi
 - Enter the sphere diameter and cylinder outer diameter. The image size follows from
   angular height = 180° − asin(cylinder Ø ÷ sphere Ø), so the site never crops the ends.
   For example, a 100 mm sphere with a 36 mm cylinder gives 158.90° and a 3625 × 1600 px image.
-- Add photos, then set each one's width, zoom, pan and mirror.
+- Choose 1 to 4 photos, then set each one's width, zoom, pan and mirror.
+- Spread the photos around the full 360°, or across the front 180° with a plain back half.
+- You choose the image height; the width is worked out from the sphere and cylinder. The tool shows the minimum height LithophaneMaker needs at 0.25 mm/px.
 - Choose the fade at each seam: crossfade, fade to white, fade to black or hard cut, with straight, wavy or slanted seams.
 - Preview the wrap on a sphere hanging from its cylinder.
 - Save the full-size PNG, either upright or rotated 180° for upload, in colour or greyscale.
