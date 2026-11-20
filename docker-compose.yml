@@ -4,5 +4,5 @@ services:
     image: bauble-image-tool:latest
     container_name: bauble-image-tool
     ports:
-      - "${PORT:-8080}:80"
+      - "${HTTP_PORT:-8080}:80"
     restart: unless-stopped

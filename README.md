@@ -18,14 +18,14 @@ Everything runs in the browser. Photos never leave your machine, and your work i
 docker compose up -d --build
 ```
 
-Then open http://localhost:8080. To use a different port, set `PORT`, for example `PORT=8090 docker compose up -d --build`.
+Then open http://localhost:8080. To use a different port, set `HTTP_PORT`, for example `HTTP_PORT=8090 docker compose up -d --build`.
 
 ## Deploy in Portainer
 
 1. **Stacks → Add stack**, give it a name such as `bauble-image-tool`.
 2. Choose **Repository**.
 3. Repository URL: `https://github.com/daveo2k/bauble-image-tool`, reference `refs/heads/main`, compose path `docker-compose.yml`.
-4. Optional: under **Environment variables**, add `PORT` to change the host port (default 8080).
+4. Optional: under **Environment variables**, add `HTTP_PORT` to change the host port (default 8080).
 5. **Deploy the stack**. Portainer builds the image from the repo and starts it.
 
 To update after a new commit, open the stack and click **Pull and redeploy**.
