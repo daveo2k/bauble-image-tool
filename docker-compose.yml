@@ -1,0 +1,8 @@
+services:
+  bauble-image-tool:
+    build: .
+    image: bauble-image-tool:latest
+    container_name: bauble-image-tool
+    ports:
+      - "${PORT:-8080}:80"
+    restart: unless-stopped
