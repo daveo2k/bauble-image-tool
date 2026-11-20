@@ -30,6 +30,8 @@ Then open http://localhost:8080. To use a different port, set `HTTP_PORT`, for e
 
 To update after a new commit, open the stack and click **Pull and redeploy**.
 
+The image is always built from the repo (`pull_policy: build`) and never pulled from a registry, so no `docker login` is needed. `HTTP_PORT` sets both the host port and the port nginx listens on inside the container.
+
 ## Without Docker
 
 `index.html` is self-contained apart from Google Fonts. Open it directly in a browser, or serve it from any static web server.
