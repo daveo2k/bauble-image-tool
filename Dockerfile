@@ -6,7 +6,8 @@ ENV HTTP_PORT=8080
 
 RUN rm -f /etc/nginx/conf.d/default.conf
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
-COPY index.html /usr/share/nginx/html/index.html
+COPY index.html site.webmanifest /usr/share/nginx/html/
+COPY brand/ /usr/share/nginx/html/brand/
 
 EXPOSE 8080
 
