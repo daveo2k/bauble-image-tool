@@ -32,6 +32,8 @@ To update after a new commit, open the stack and click **Pull and redeploy**.
 
 The image is always built from the repo (`pull_policy: build`) and never pulled from a registry, so no `docker login` is needed. `HTTP_PORT` sets both the host port and the port nginx listens on inside the container.
 
+Don't pick a port that browsers refuse to open, such as 5060 or 5061 (used by phone systems), 6000, or 6665–6669. The container still runs and shows as healthy, but the browser shows "This site can't be reached" (`ERR_UNSAFE_PORT`). Ports such as 8080, 8090 or 5080 work.
+
 ## Without Docker
 
 `index.html` is self-contained apart from Google Fonts. Open it directly in a browser, or serve it from any static web server.
