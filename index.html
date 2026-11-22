@@ -294,6 +294,7 @@ dl.stats dd { margin: 0; text-align: right; font-family: var(--font-mono); font-
         <div class="btn-col">
           <button type="button" class="primary" id="b-save-rot">Save upload copy (rotated 180°)</button>
           <button type="button" id="b-save-up">Save upright copy</button>
+          <button type="button" class="primary" id="b-studio" hidden>Send to Lithophane Studio</button>
         </div>
         <div class="status" id="save-status" role="status"></div>
         <p class="note">Upload the rotated copy. LithophaneMaker puts the cylinder at the bottom, so turning the image over makes it upright when the bauble hangs from its cylinder.</p>
@@ -1016,6 +1017,33 @@ async function exportPNG(rot) {
 }
 $('#b-save-rot').addEventListener('click', () => exportPNG(true));
 $('#b-save-up').addEventListener('click', () => exportPNG(false));
+
+/* ---------- Hand the wrap to Lithophane Studio (when opened from it with ?studio=1) ---------- */
+const fromStudio = new URLSearchParams(location.search).get('studio') === '1';
+async function sendToStudio() {
+  if (!state.panels.length) { setStatus('Add at least one photo first.', 'err'); return; }
+  setStatus('Sending to Lithophane Studio…');
+  await new Promise(r => setTimeout(r, 30));
+  const res = composite(1);
+  const cv = document.createElement('canvas'); cv.width = res.W; cv.height = res.H;
+  cv.getContext('2d').putImageData(res.img, 0, 0);
+  const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
+  const ok = await new Promise(done => {
+    try {
+      const r = indexedDB.open('litho-studio', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('handoff');
+      r.onerror = () => done(false);
+      r.onsuccess = () => {
+        const tx = r.result.transaction('handoff', 'readwrite');
+        tx.objectStore('handoff').put({ blob, sphereD: +state.sphereD, cylD: +state.cylOD, at: Date.now() }, 'wrap');
+        tx.oncomplete = () => done(true); tx.onerror = () => done(false);
+      };
+    } catch { done(false); }
+  });
+  if (ok) location.href = '../studio.html?shape=bauble#from=wrap';
+  else setStatus('This browser would not pass the image on. Save the upright copy and open it in the studio instead.', 'err');
+}
+$('#b-studio').addEventListener('click', sendToStudio);
 $('#s-grey').addEventListener('change', e => { state.greySave = e.target.checked; scheduleSave(); });
 
 /* ---------- Keep work between visits (this browser only) ---------- */
@@ -1080,6 +1108,14 @@ function syncInputs() {
   const ok = await restore();
   if (!ok) loadSamples();
   restoring = false;
+  if (fromStudio) {
+    // sizes chosen in the studio come in the address: #sphereD=100&cylD=36
+    const h = new URLSearchParams(location.hash.slice(1));
+    const sd = parseFloat(h.get('sphereD')), cd = parseFloat(h.get('cylD'));
+    if (sd > 0) state.sphereD = sd;
+    if (cd > 0) state.cylOD = cd;
+    $('#b-studio').hidden = false;
+  }
   syncInputs(); renderCards(); renderSeamPicker(); draw();
   getDownloads();
   new ResizeObserver(() => requestDraw()).observe(wrapCv.parentElement);
