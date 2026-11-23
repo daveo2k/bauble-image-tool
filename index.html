@@ -193,6 +193,8 @@ dl.stats dd { margin: 0; text-align: right; font-family: var(--font-mono); font-
           <label class="chk small"><input type="checkbox" id="i-auto" checked> Work out from sphere size</label></div>
         <div class="ctl"><label for="i-span">Photos cover</label><select id="i-span"><option value="360">Full wrap (360°)</option><option value="180">Front half (180°)</option></select></div>
         <div class="ctl"><label for="i-fill">Empty space and back half</label><select id="i-fill"><option value="white">White</option><option value="black">Black</option></select></div>
+        <div class="ctl"><label for="i-efade">Fade photo tops and bottoms</label><div class="row"><input type="number" id="i-efade" class="sm" min="0" max="40" step="1"><span class="unit">mm</span></div>
+          <span class="info">Where a photo stops short of the top or bottom of the wrap, it fades into the empty space instead of stopping at a hard edge, which would print as a ledge. 0 for a hard edge.</span></div>
       </div>
       <div class="bauble-out">
         <dl class="stats" aria-live="polite">
@@ -311,7 +313,7 @@ dl.stats dd { margin: 0; text-align: right; font-family: var(--font-mono); font-
 const $ = s => document.querySelector(s);
 const DEF_SEAM = () => ({ type: 'crossfade', width: 145, curve: 'smooth', shape: 'straight', amp: 40, waves: 3, slant: 150 });
 const state = {
-  sphereD: 100, cylOD: 36, outH: 1600, autoH: true, fill: 'white', span: 360,
+  sphereD: 100, cylOD: 36, outH: 1600, autoH: true, fill: 'white', span: 360, edgeFade: 8,
   guides: true, greyView: false, greySave: false,
   sameSeams: true, seamSel: 0, seams: [], panels: [], sel: 0, globeMode: 'lit'
 };
@@ -366,6 +368,23 @@ function seamGeo(j, P, k) {
 const baseScale = (p, g) => p.zoom * g.H / p.ih;   // output px per source px at full size
 
 /* ---------- Compositing ---------- */
+// Fade a photo's top and bottom edges into the fill colour, where the photo stops short of the wrap's top or bottom.
+// y0 is the photo's top row in this strip and h its height, both in strip px; F is the fade height in px. The fade
+// runs inside the photo, so the photo's own edge rows blend fully into the fill and no hard line is left.
+function fadeEdges(d, sw, H, y0, h, F, fillV) {
+  const y1 = y0 + h;
+  F = Math.min(F, h / 2);
+  if (F < 1) return;
+  const ease = curves.smooth;
+  const blendRow = (y, a) => {
+    const b = 1 - a, base = y * sw * 4;
+    for (let i = base, e = base + sw * 4; i < e; i += 4) {
+      d[i] = d[i] * a + fillV * b; d[i + 1] = d[i + 1] * a + fillV * b; d[i + 2] = d[i + 2] * a + fillV * b;
+    }
+  };
+  if (y0 > 0.5) for (let y = Math.max(0, Math.floor(y0)); y < Math.min(H, Math.ceil(y0 + F)); y++) blendRow(y, ease(clamp((y + 0.5 - y0) / F, 0, 1)));
+  if (y1 < H - 0.5) for (let y = Math.max(0, Math.floor(y1 - F)); y < Math.min(H, Math.ceil(y1)); y++) blendRow(y, ease(clamp((y1 - y - 0.5) / F, 0, 1)));
+}
 function composite(kReq) {
   const g = geom();
   const W = Math.max(1, Math.round(g.W * kReq)), H = Math.max(1, Math.round(g.H * kReq));
@@ -375,6 +394,8 @@ function composite(kReq) {
   if (!state.panels.length) { o.fill(255); return { img: out, W, H, k, S, sg: [], g, P, sh }; }
   const sg = P.items.map((_, j) => seamGeo(j, P, k));
   const fillV = state.fill === 'black' ? 0 : 255;
+  const sc0 = p => baseScale(p, g) * k;
+  const pxPerMm = g.H / (Math.PI * g.D * g.height / 360);   // full-size image px per mm of sphere surface, top to bottom
   const strips = P.items.map((p, i) => {
     const sL = sg[i], sR = sg[(i + 1) % N];
     const ox = Math.floor(S[i] - sL.F / 2 - sL.A - 2);
@@ -389,7 +410,9 @@ function composite(kReq) {
       ctx.setTransform(m * sc, 0, 0, sc, Xc - m * sc * p.cx, Yc - sc * p.cy);
       ctx.drawImage(p.src, 0, 0);
     }
-    return { ox, sw, d: ctx.getImageData(0, 0, sw, H).data };
+    const d = ctx.getImageData(0, 0, sw, H).data;
+    if (p && p.src && state.edgeFade > 0) fadeEdges(d, sw, H, H / 2 - sc0(p) * p.cy, sc0(p) * p.ih, state.edgeFade * pxPerMm * k, fillV);
+    return { ox, sw, d };
   });
   const zs = new Array(N), ze = new Array(N), cc = new Array(N);
   for (let y = 0; y < H; y++) {
@@ -861,6 +884,7 @@ function updateStats() {
   $(sel).addEventListener('input', e => { const v = +e.target.value; if (v > 0) { state[key] = v; requestDraw(); } });
 });
 $('#i-fill').addEventListener('change', e => { state.fill = e.target.value; renderCards(); requestDraw(); });
+$('#i-efade').addEventListener('input', e => { state.edgeFade = clamp(+e.target.value || 0, 0, 40); requestDraw(); });
 $('#i-auto').addEventListener('change', e => {
   state.autoH = e.target.checked;
   $('#i-h').disabled = state.autoH;
@@ -1064,7 +1088,7 @@ function scheduleSave() {
     try {
       idb = idb || await openDB(); if (!idb) return;
       const snap = {
-        v: 1, sphereD: state.sphereD, cylOD: state.cylOD, outH: state.outH, autoH: state.autoH, fill: state.fill, span: state.span, greySave: state.greySave,
+        v: 1, sphereD: state.sphereD, cylOD: state.cylOD, outH: state.outH, autoH: state.autoH, fill: state.fill, span: state.span, edgeFade: state.edgeFade, greySave: state.greySave,
         sameSeams: state.sameSeams, seamSel: state.seamSel, seams: state.seams, sel: state.sel, globeMode: state.globeMode,
         panels: state.panels.map(p => p.src
           ? { name: p.name, blob: p.blob, sample: p.sample, f: p.f, zoom: p.zoom, cx: p.cx, cy: p.cy, mirror: p.mirror }
@@ -1090,7 +1114,7 @@ async function restore() {
       panels.push(p);
     }
     if (!panels.length) return false;
-    Object.assign(state, { sphereD: snap.sphereD, cylOD: snap.cylOD, outH: snap.outH, autoH: snap.autoH !== false, fill: snap.fill || 'white', span: snap.span === 180 ? 180 : 360, greySave: !!snap.greySave,
+    Object.assign(state, { sphereD: snap.sphereD, cylOD: snap.cylOD, outH: snap.outH, autoH: snap.autoH !== false, fill: snap.fill || 'white', span: snap.span === 180 ? 180 : 360, edgeFade: snap.edgeFade ?? 8, greySave: !!snap.greySave,
       sameSeams: snap.sameSeams !== false, seamSel: snap.seamSel || 0, seams: snap.seams || [], sel: snap.sel || 0, globeMode: snap.globeMode || 'lit', panels });
     syncSeams();
     return true;
@@ -1099,7 +1123,7 @@ async function restore() {
 function syncInputs() {
   $('#i-sphere').value = state.sphereD; $('#i-cyl').value = state.cylOD; $('#i-h').value = state.outH;
   $('#i-auto').checked = state.autoH; $('#i-h').disabled = state.autoH;
-  $('#i-fill').value = state.fill; $('#i-span').value = String(state.span); $('#s-grey').checked = state.greySave; $('#f-same').checked = state.sameSeams;
+  $('#i-fill').value = state.fill; $('#i-efade').value = state.edgeFade; $('#i-span').value = String(state.span); $('#s-grey').checked = state.greySave; $('#f-same').checked = state.sameSeams;
   $('#g-mode').value = state.globeMode;
 }
 
