@@ -1,5 +1,7 @@
 # Lithophane Bauble Wrap
 
+> **This repository has moved.** The tool now lives in the `wrap/` folder of [lithophane-studio](https://github.com/daveo2k/lithophane-studio), with this repository's history, and is served at `/wrap/` alongside the studio. Make changes there; this repository is kept read-only for reference.
+
 A browser tool for building the 360° wrap image for a lithophane sphere (Classic LithophaneMaker Globe, "Fit Image to Sphere" ticked).
 
 - Enter the sphere diameter and cylinder outer diameter. The image size follows from
